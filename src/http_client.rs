@@ -56,6 +56,7 @@ pub fn get_reqwest_client_builder(enforce_block: bool) -> ClientBuilder {
     });
 
     Client::builder()
+        .https_only(cfg!(feature = "fips"))
         .default_headers(headers)
         .redirect(redirect_policy)
         .dns_resolver(CustomDns::instance(enforce_block))

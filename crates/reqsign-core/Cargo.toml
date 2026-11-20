@@ -1,0 +1,15 @@
+[package]
+name = "reqsign-core"
+version = "3.3.3"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[features]
+jwt = ["upstream/jwt"]
+aws-lc-fips = ["dep:aws-lc-rs", "dep:hex"]
+
+[dependencies]
+upstream = { package = "reqsign-core", git = "https://github.com/apache/reqsign.git", rev = "d935dbdb822bc2a525e49cca3e8dd13618669f93" }
+aws-lc-rs = { version = "=1.19.0", optional = true, default-features = false, features = ["fips"] }
+hex = { version = "0.4", optional = true }

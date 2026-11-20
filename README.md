@@ -70,6 +70,8 @@ There are also [community driven packages](https://github.com/dani-garcia/vaultw
 
 Alternatively, you can also [build Vaultwarden](https://github.com/dani-garcia/vaultwarden/wiki/Building-binary) yourself.
 
+This fork offers an opt-in [AWS-LC FIPS mode](docs/fips.md) for self-hosted deployments.
+
 While Vaultwarden is based upon the [Rocket web framework](https://rocket.rs) which has built-in support for TLS our recommendation would be that you setup a reverse proxy (see [proxy examples](https://github.com/dani-garcia/vaultwarden/wiki/Proxy-examples)).
 
 > [!TIP]

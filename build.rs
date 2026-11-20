@@ -1,5 +1,8 @@
 use std::{env, io::Error, process::Command};
 
+#[cfg(all(feature = "fips", feature = "unsafe_test_mode"))]
+compile_error!("The fips and unsafe_test_mode features cannot be combined");
+
 fn main() {
     // These allow using e.g. #[cfg(mysql)] instead of #[cfg(feature = "mysql")], which helps when trying to add them through macros
     #[cfg(feature = "sqlite_system")] // The `sqlite` feature implies this one.

@@ -76,6 +76,7 @@ RUN . /env-cargo && \
 # Copies over *only* your manifests and build files
 COPY ./Cargo.* ./rust-toolchain.toml ./build.rs ./
 COPY ./macros ./macros
+COPY ./crates ./crates
 
 ARG CARGO_PROFILE=release
 

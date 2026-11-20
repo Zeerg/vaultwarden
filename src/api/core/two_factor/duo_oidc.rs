@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
+use crate::crypto::backend::digest::{Digest, SHA512_256, digest};
 use chrono::Utc;
 use data_encoding::HEXLOWER;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use reqwest::{StatusCode, header};
-use ring::digest::{Digest, SHA512_256, digest};
 use serde::Serialize;
 use url::Url;
 

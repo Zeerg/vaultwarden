@@ -426,7 +426,7 @@ pub fn get_display_size(size: i64) -> String {
 }
 
 pub fn get_uuid() -> String {
-    uuid::Uuid::new_v4().to_string()
+    crate::crypto::generate_uuid().to_string()
 }
 
 //

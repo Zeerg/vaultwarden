@@ -55,6 +55,8 @@ mod config;
 mod crypto;
 #[macro_use]
 mod db;
+#[cfg(feature = "fips")]
+mod fips;
 mod http_client;
 mod mail;
 mod ratelimit;
@@ -72,11 +74,19 @@ pub use util::is_running_in_container;
 
 #[rocket::main]
 async fn main() -> Result<(), Error> {
+    #[cfg(feature = "fips")]
+    fips::install_crypto_providers()?;
+    #[cfg(not(feature = "fips"))]
     install_rustls_crypto_provider();
     parse_args();
     launch_info();
 
     let level = init_logging()?;
+    #[cfg(feature = "fips")]
+    {
+        fips::validate_listener(&rocket::Config::from(rocket::Config::figment()))?;
+        info!("AWS-LC FIPS mode active (AWS-LC {})", aws_lc_rs::awslc_version());
+    }
 
     check_data_folder().await;
     auth::initialize_keys().await.unwrap_or_else(|e| {
@@ -107,15 +117,23 @@ FLAGS:
     -v, --version    Prints the app and web-vault version
 
 COMMAND:
-    hash [--preset {bitwarden|owasp}]  Generate an Argon2id PHC ADMIN_TOKEN
     backup                             Create a backup of the SQLite database
                                        You can also send the USR1 signal to trigger a backup
+";
+
+#[cfg(not(feature = "fips"))]
+const HASH_HELP: &str = "\
+    hash [--preset {bitwarden|owasp}]  Generate an Argon2id PHC ADMIN_TOKEN
 
 PRESETS:                  m=         t=          p=
     bitwarden (default) 64MiB, 3 Iterations, 4 Threads
     owasp               19MiB, 2 Iterations, 1 Thread
 
 ";
+
+#[cfg(feature = "fips")]
+const HASH_HELP: &str =
+    "    hash                               Generate a random admin credential and its SHA-256 ADMIN_TOKEN\n";
 
 pub const VERSION: Option<&str> = option_env!("VW_VERSION");
 
@@ -125,64 +143,30 @@ fn parse_args() {
 
     if pargs.contains(["-h", "--help"]) {
         println!("Vaultwarden {version}");
-        print!("{HELP}");
+        print!("{HELP}{HASH_HELP}");
         exit(0);
     } else if pargs.contains(["-v", "--version"]) {
         config::SKIP_CONFIG_VALIDATION.store(true, Ordering::Relaxed);
         let web_vault_version = util::get_active_web_release();
         println!("Vaultwarden {version}");
         println!("Web-Vault {web_vault_version}");
+        #[cfg(feature = "fips")]
+        println!("AWS-LC FIPS mode active (AWS-LC {})", aws_lc_rs::awslc_version());
         exit(0);
     }
 
     if let Some(command) = pargs.subcommand().unwrap_or_default() {
         if command == "hash" {
-            use argon2::{Algorithm::Argon2id, Argon2, ParamsBuilder, PasswordHasher, Version::V0x13};
-
-            let mut argon2_params = ParamsBuilder::new();
-            let preset: Option<String> = pargs.opt_value_from_str(["-p", "--preset"]).unwrap_or_default();
-            let selected_preset;
-            if preset.as_deref() == Some("owasp") {
-                selected_preset = "owasp";
-                argon2_params.m_cost(19456);
-                argon2_params.t_cost(2);
-                argon2_params.p_cost(1);
+            if cfg!(feature = "fips") {
+                if !pargs.finish().is_empty() {
+                    eprintln!("The FIPS build's hash command takes no arguments");
+                    exit(1);
+                }
+                let token = crypto::generate_id::<32>();
+                let hash = crypto::sha256_hex(token.as_bytes());
+                println!("Admin login token: {token}\nADMIN_TOKEN='$sha256${hash}'");
             } else {
-                // Bitwarden preset is the default
-                selected_preset = "bitwarden";
-                argon2_params.m_cost(65540);
-                argon2_params.t_cost(3);
-                argon2_params.p_cost(4);
-            }
-
-            println!("Generate an Argon2id PHC string using the '{selected_preset}' preset:\n");
-
-            let password = rpassword::prompt_password("Password: ").unwrap();
-            if password.len() < 8 {
-                println!("\nPassword must contain at least 8 characters");
-                exit(1);
-            }
-
-            let password_verify = rpassword::prompt_password("Confirm Password: ").unwrap();
-            if password != password_verify {
-                println!("\nPasswords do not match");
-                exit(1);
-            }
-
-            let argon2 = Argon2::new(Argon2id, V0x13, argon2_params.build().unwrap());
-            let salt = crypto::get_random_bytes::<32>();
-
-            let argon2_timer = tokio::time::Instant::now();
-            if let Ok(password_hash) = argon2.hash_password_with_salt(password.as_bytes(), &salt) {
-                println!(
-                    "\n\
-                    ADMIN_TOKEN='{password_hash}'\n\n\
-                    Generation of the Argon2id PHC string took: {:?}",
-                    argon2_timer.elapsed()
-                );
-            } else {
-                println!("Unable to generate Argon2id PHC hash.");
-                exit(1);
+                hash_admin_token(&mut pargs);
             }
         } else if command == "backup" {
             match db::backup_sqlite() {
@@ -200,6 +184,57 @@ fn parse_args() {
     }
 }
 
+fn hash_admin_token(pargs: &mut pico_args::Arguments) {
+    use argon2::{Algorithm::Argon2id, Argon2, ParamsBuilder, PasswordHasher, Version::V0x13};
+
+    let mut argon2_params = ParamsBuilder::new();
+    let preset: Option<String> = pargs.opt_value_from_str(["-p", "--preset"]).unwrap_or_default();
+    let selected_preset;
+    if preset.as_deref() == Some("owasp") {
+        selected_preset = "owasp";
+        argon2_params.m_cost(19456);
+        argon2_params.t_cost(2);
+        argon2_params.p_cost(1);
+    } else {
+        // Bitwarden preset is the default
+        selected_preset = "bitwarden";
+        argon2_params.m_cost(65540);
+        argon2_params.t_cost(3);
+        argon2_params.p_cost(4);
+    }
+
+    println!("Generate an Argon2id PHC string using the '{selected_preset}' preset:\n");
+
+    let password = rpassword::prompt_password("Password: ").unwrap();
+    if password.len() < 8 {
+        println!("\nPassword must contain at least 8 characters");
+        exit(1);
+    }
+
+    let password_verify = rpassword::prompt_password("Confirm Password: ").unwrap();
+    if password != password_verify {
+        println!("\nPasswords do not match");
+        exit(1);
+    }
+
+    let argon2 = Argon2::new(Argon2id, V0x13, argon2_params.build().unwrap());
+    let salt = crypto::get_random_bytes::<32>();
+
+    let argon2_timer = tokio::time::Instant::now();
+    if let Ok(password_hash) = argon2.hash_password_with_salt(password.as_bytes(), &salt) {
+        println!(
+            "\n\
+                    ADMIN_TOKEN='{password_hash}'\n\n\
+                    Generation of the Argon2id PHC string took: {:?}",
+            argon2_timer.elapsed()
+        );
+    } else {
+        println!("Unable to generate Argon2id PHC hash.");
+        exit(1);
+    }
+}
+
+#[cfg(not(feature = "fips"))]
 fn install_rustls_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         rustls::crypto::ring::default_provider()

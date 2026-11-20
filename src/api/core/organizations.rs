@@ -3275,7 +3275,8 @@ struct OrganizationUserRecoverAccountRequest {
 #[get("/organizations/<org_id>/public-key")]
 async fn get_organization_public_key(org_id: OrganizationId, headers: Headers, conn: DbConn) -> JsonResult {
     // SSO users without an org get the fake one, whose key the v2 JIT password flow fetches anyway
-    if org_id.eq_ignore_ascii_case(FAKE_SSO_IDENTIFIER) && headers.user.private_key.is_none() {
+    if !cfg!(feature = "fips") && org_id.eq_ignore_ascii_case(FAKE_SSO_IDENTIFIER) && headers.user.private_key.is_none()
+    {
         return Ok(Json(json!({
             "object": "organizationPublicKey",
             "publicKey": fake_sso_org_public_key().await?,

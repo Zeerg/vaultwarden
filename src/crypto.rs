@@ -3,24 +3,39 @@
 //
 use std::num::NonZeroU32;
 
+#[cfg(feature = "fips")]
+pub(crate) use aws_lc_rs as backend;
 use data_encoding::{Encoding, HEXLOWER};
-use ring::{digest, hmac, pbkdf2};
+#[cfg(not(feature = "fips"))]
+pub(crate) use ring as backend;
+
+use backend::{digest, hmac, pbkdf2};
 
 const DIGEST_ALG: pbkdf2::Algorithm = pbkdf2::PBKDF2_HMAC_SHA256;
 const OUTPUT_LEN: usize = digest::SHA256_OUTPUT_LEN;
 
-pub fn hash_password(secret: &[u8], salt: &[u8], iterations: u32) -> Vec<u8> {
+pub fn hash_password(secret: &[u8], salt: &[u8], iterations: u32) -> Result<Vec<u8>, crate::Error> {
+    if cfg!(feature = "fips") && !fips_pbkdf2_parameters(secret, salt, iterations) {
+        err!("FIPS mode requires a password hashing input of at least 14 bytes, a 16-byte salt, and 1000 iterations");
+    }
     let mut out = vec![0u8; OUTPUT_LEN]; // Initialize array with zeros
 
     let iterations = NonZeroU32::new(iterations).expect("Iterations can't be zero");
     pbkdf2::derive(DIGEST_ALG, iterations, salt, secret, &mut out);
 
-    out
+    Ok(out)
 }
 
 pub fn verify_password_hash(secret: &[u8], salt: &[u8], previous: &[u8], iterations: u32) -> bool {
+    if cfg!(feature = "fips") && !fips_pbkdf2_parameters(secret, salt, iterations) {
+        return false;
+    }
     let iterations = NonZeroU32::new(iterations).expect("Iterations can't be zero");
     pbkdf2::verify(DIGEST_ALG, iterations, salt, secret, previous).is_ok()
+}
+
+fn fips_pbkdf2_parameters(secret: &[u8], salt: &[u8], iterations: u32) -> bool {
+    secret.len() >= 14 && salt.len() >= 16 && iterations >= 1000
 }
 
 //
@@ -39,7 +54,7 @@ pub fn hmac_sign(key: &str, data: &str) -> String {
 
 /// Return an array holding `N` random bytes.
 pub fn get_random_bytes<const N: usize>() -> [u8; N] {
-    use ring::rand::{SecureRandom, SystemRandom};
+    use backend::rand::{SecureRandom, SystemRandom};
 
     let mut array = [0; N];
     SystemRandom::new().fill(&mut array).expect("Error generating random values");
@@ -54,16 +69,20 @@ pub fn encode_random_bytes<const N: usize>(e: &Encoding) -> String {
 
 /// Generates a random string over a specified alphabet.
 pub fn get_random_string(alphabet: &[u8], num_chars: usize) -> String {
-    // Ref: https://rust-lang-nursery.github.io/rust-cookbook/algorithms/randomness.html
-    use rand::RngExt;
-    let mut rng = rand::rng();
-
-    (0..num_chars)
-        .map(|_| {
-            let i = rng.random_range(0..alphabet.len());
-            char::from(alphabet[i])
-        })
+    assert!((1..=256).contains(&alphabet.len()));
+    // Reject the tail so that each alphabet index is equally likely.
+    let limit = 256 - 256 % alphabet.len();
+    std::iter::repeat_with(get_random_bytes::<32>)
+        .flatten()
+        .map(usize::from)
+        .filter(|&byte| byte < limit)
+        .map(|byte| char::from(alphabet[byte % alphabet.len()]))
+        .take(num_chars)
         .collect()
+}
+
+pub fn generate_uuid() -> uuid::Uuid {
+    uuid::Builder::from_random_bytes(get_random_bytes()).into_uuid()
 }
 
 /// Generates a random numeric string.
@@ -119,4 +138,9 @@ pub fn ct_eq<T: AsRef<[u8]>, U: AsRef<[u8]>>(a: T, b: U) -> bool {
 //
 pub fn sha256_hex(data: &[u8]) -> String {
     HEXLOWER.encode(digest::digest(&digest::SHA256, data).as_ref())
+}
+
+pub fn admin_token_digest(configured_token: &str) -> Option<&str> {
+    let hash = configured_token.strip_prefix("$sha256$")?;
+    (hash.len() == 64 && HEXLOWER.decode(hash.as_bytes()).is_ok()).then_some(hash)
 }

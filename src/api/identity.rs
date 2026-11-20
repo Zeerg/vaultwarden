@@ -41,18 +41,18 @@ use crate::{
 };
 
 pub fn routes() -> Vec<Route> {
-    routes![
+    let mut routes = routes![
         login,
         post_prelogin,
         prelogin_password,
         register_verification_email,
         register_verification_email_clicked,
-        register_finish,
-        prevalidate,
-        authorize,
-        oidcsignin,
-        oidcsignin_error
-    ]
+        register_finish
+    ];
+    if !cfg!(feature = "fips") {
+        routes.extend(routes![prevalidate, authorize, oidcsignin, oidcsignin_error]);
+    }
+    routes
 }
 
 #[post("/connect/token", data = "<data>")]

@@ -153,7 +153,7 @@ fn websockets_hub<'r>(
         let users = Arc::clone(&WS_USERS);
 
         // Add a channel to send messages to this client to the map
-        let entry_uuid = uuid::Uuid::new_v4();
+        let entry_uuid = crate::crypto::generate_uuid();
         let (tx, rx) = tokio::sync::mpsc::channel::<Message>(100);
         users.map.entry(claims.sub.to_string()).or_default().push((entry_uuid, tx));
 
@@ -237,7 +237,7 @@ fn anonymous_websockets_hub<'r>(ws: WebSocket, token: String, ip: ClientIp) -> R
         // Clients reconnect with the same token while a login request is still pending, so keep
         // every subscriber instead of replacing, otherwise the older one takes the newer one down.
         let (tx, rx) = tokio::sync::mpsc::channel::<Message>(100);
-        let entry_uuid = uuid::Uuid::new_v4();
+        let entry_uuid = crate::crypto::generate_uuid();
         subscriptions.map.entry(token.clone()).or_default().push((entry_uuid, tx));
 
         // Once the guard goes out of scope, the connection will have been closed and the entry will be deleted from the map

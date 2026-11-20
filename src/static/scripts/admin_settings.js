@@ -156,13 +156,13 @@ function masterCheck(check_id, inputs_query) {
     }
 }
 
-// This will check if the ADMIN_TOKEN is not a Argon2 hashed value.
+// Check whether the ADMIN_TOKEN uses a supported hash format.
 // Else it will show a warning, unless someone has closed it.
 // Then it will not show this warning for 30 days.
 function checkAdminToken() {
     const admin_token = document.getElementById("input_admin_token");
     const disable_admin_token = document.getElementById("input_disable_admin_token");
-    if (!disable_admin_token.checked && !admin_token.value.startsWith("$argon2")) {
+    if (!disable_admin_token.checked && !admin_token.value.startsWith("$argon2") && !/^\$sha256\$[a-f0-9]{64}$/.test(admin_token.value)) {
         // Check if the warning has been closed before and 30 days have passed
         const admin_token_warning_closed = localStorage.getItem("admin_token_warning_closed");
         if (admin_token_warning_closed !== null) {

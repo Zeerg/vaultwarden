@@ -86,7 +86,11 @@ mod s3 {
 
     static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         // Storage endpoints are administrator-configured and may be private.
-        crate::http_client::get_reqwest_client_builder(false).build().expect("Failed to build OpenDAL HTTP client")
+        let mut builder = crate::http_client::get_reqwest_client_builder(false);
+        if cfg!(feature = "fips") {
+            builder = builder.redirect(reqwest::redirect::Policy::none());
+        }
+        builder.build().expect("Failed to build OpenDAL HTTP client")
     });
 
     pub(super) fn is_uri(path: &str) -> bool {
@@ -180,19 +184,27 @@ mod s3 {
                 use reqsign_core::time::Timestamp;
                 use tokio::sync::OnceCell;
 
-                static DEFAULT_CREDENTIAL_CHAIN: OnceCell<DefaultCredentialsChain> = OnceCell::const_new();
-
-                let chain = DEFAULT_CREDENTIAL_CHAIN
-                    .get_or_init(|| {
-                        let conf = ProviderConfig::default().with_http_client(AwsReqwestConnector::new());
-
-                        DefaultCredentialsChain::builder().configure(conf).build()
-                    })
-                    .await;
-
-                let creds = chain.provide_credentials().await.map_err(|e| {
-                    reqsign_core::Error::unexpected("failed to load AWS credentials via AWS SDK").with_source(e)
-                })?;
+                let creds = if cfg!(feature = "fips") {
+                    if let Some(command) = crate::util::get_env("FIPS_S3_CREDENTIAL_PROCESS") {
+                        aws_config::credential_process::CredentialProcessProvider::new(command)
+                            .provide_credentials()
+                            .await
+                    } else {
+                        aws_config::environment::EnvironmentVariableCredentialsProvider::new()
+                            .provide_credentials()
+                            .await
+                    }
+                } else {
+                    static DEFAULT_CREDENTIAL_CHAIN: OnceCell<DefaultCredentialsChain> = OnceCell::const_new();
+                    let chain = DEFAULT_CREDENTIAL_CHAIN
+                        .get_or_init(|| {
+                            let conf = ProviderConfig::default().with_http_client(AwsReqwestConnector::new());
+                            DefaultCredentialsChain::builder().configure(conf).build()
+                        })
+                        .await;
+                    chain.provide_credentials().await
+                }
+                .map_err(|e| reqsign_core::Error::unexpected("failed to load AWS credentials").with_source(e))?;
 
                 let expires_in = if let Some(expiration) = creds.expiry() {
                     let duration = expiration.duration_since(std::time::UNIX_EPOCH).map_err(|e| {
@@ -230,7 +242,12 @@ mod s3 {
             config.enable_virtual_host_style = true;
         }
 
-        let use_aws_sdk_credentials = !uri_has_credential_options(&uri, &config);
+        let use_aws_sdk_credentials = if cfg!(feature = "fips") {
+            configure_fips(&mut config)?;
+            config.access_key_id.is_none()
+        } else {
+            !uri_has_credential_options(&uri, &config)
+        };
         let mut builder = config.into_builder();
 
         if use_aws_sdk_credentials {
@@ -241,6 +258,58 @@ mod s3 {
         let http_transport = opendal::HttpTransporter::new(ReqwestTransport::new(HTTP_CLIENT.clone()));
         let context = opendal::OperationContext::new().with_http_transport(http_transport);
         Ok(opendal::Operator::new(builder)?.with_context(context))
+    }
+
+    fn configure_fips(config: &mut opendal::services::S3Config) -> Result<(), Error> {
+        #[expect(deprecated, reason = "Reject the legacy alias as well as skip_signature")]
+        let skip_signature = config.skip_signature || config.allow_anonymous;
+        let endpoint = config.endpoint.as_deref().and_then(|value| Url::parse(value).ok());
+        let Some(endpoint) = endpoint.filter(|url| {
+            url.scheme() == "https"
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        }) else {
+            err!("FIPS mode requires an explicit HTTPS S3 endpoint without credentials, query or fragment");
+        };
+        let Some(host) = endpoint.host_str() else {
+            err!("FIPS mode requires a valid S3 endpoint host");
+        };
+        if host.ends_with(".amazonaws.com") || host.ends_with(".amazonaws.com.cn") || host.ends_with(".api.aws") {
+            let region = config
+                .region
+                .clone()
+                .or_else(|| std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION")).ok());
+            let Some(region) = region.filter(|name| {
+                !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            }) else {
+                err!("FIPS mode requires a valid AWS region for S3");
+            };
+            let endpoint_host = host.strip_prefix(&format!("{}.", config.bucket)).unwrap_or(host);
+            let fips_endpoints =
+                [format!("s3-fips.{region}.amazonaws.com"), format!("s3-fips.dualstack.{region}.amazonaws.com")];
+            if !fips_endpoints.iter().any(|allowed| endpoint_host == allowed) {
+                err!("FIPS mode requires a regional S3 FIPS endpoint for Amazon S3");
+            }
+        }
+        if config.role_arn.is_some()
+            || config.profile.is_some()
+            || skip_signature
+            || config.bucket.ends_with("--x-s3")
+            || config.access_key_id.is_some() != config.secret_access_key.is_some()
+            || config.server_side_encryption_customer_algorithm.is_some()
+            || config.server_side_encryption_customer_key.is_some()
+            || config.server_side_encryption_customer_key_md5.is_some()
+            || config.checksum_algorithm.as_deref() == Some("md5")
+        {
+            err!(
+                "FIPS mode requires signed S3 requests with explicit credentials, AWS environment credentials or FIPS_S3_CREDENTIAL_PROCESS. S3 Express, SSE-C and MD5 checksums are unavailable."
+            );
+        }
+        config.disable_config_load = true;
+        config.disable_ec2_metadata = true;
+        Ok(())
     }
 
     fn uri_has_option(uri: &opendal::OperatorUri, names: &[&str]) -> bool {

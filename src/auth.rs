@@ -17,7 +17,6 @@ use ipnet::IpNet;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, errors::ErrorKind};
 use num_traits::FromPrimitive;
 use openssl::rsa::Rsa;
-use ring::hmac;
 use serde::{de::DeserializeOwned, ser::Serialize};
 
 use rocket::{
@@ -29,6 +28,7 @@ use crate::{
     CONFIG,
     api::ApiResult,
     config::PathType,
+    crypto::backend::hmac,
     db::{
         DbConn,
         models::{
@@ -89,12 +89,19 @@ pub async fn initialize_keys() -> Result<(), Error> {
         let pem = priv_key_buffer.to_vec();
         (Rsa::private_key_from_pem(&pem)?, pem)
     } else {
+        #[cfg(feature = "fips")]
+        let rsa_key = crate::fips::generate_rsa_key()?;
+        #[cfg(not(feature = "fips"))]
         let rsa_key = Rsa::generate(2048)?;
         let priv_key_buffer = rsa_key.private_key_to_pem()?;
         operator.write(&rsa_key_filename, priv_key_buffer.clone()).await?;
         info!("Private key '{}' created correctly", CONFIG.private_rsa_key());
         (rsa_key, priv_key_buffer)
     };
+    #[cfg(feature = "fips")]
+    if !crate::fips::valid_rsa_key(&priv_key.private_key_to_der()?) {
+        err!("AWS-LC rejected the RSA signing key for FIPS mode");
+    }
     let pub_key_buffer = priv_key.public_key_to_pem()?;
 
     let enc = EncodingKey::from_rsa_pem(&priv_key_buffer)?;

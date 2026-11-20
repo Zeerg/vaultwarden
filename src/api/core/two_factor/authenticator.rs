@@ -110,11 +110,13 @@ pub async fn validate_totp_code(
     ip: &ClientIp,
     conn: &DbConn,
 ) -> EmptyResult {
-    use totp_lite::{Sha1, totp_custom};
-
     let Ok(decoded_secret) = BASE32.decode(secret.as_bytes()) else {
         err!("Invalid TOTP secret")
     };
+    #[cfg(feature = "fips")]
+    if decoded_secret.len() < 14 {
+        err!("FIPS mode requires an authenticator secret of at least 112 bits");
+    }
 
     let mut twofactor = TwoFactor::find_by_user_and_type(user_id, TwoFactorType::Authenticator, conn)
         .await
@@ -135,7 +137,7 @@ pub async fn validate_totp_code(
         // We need to calculate the time offsite and cast it as an u64.
         // Since we only have times into the future and the totp generator needs an u64 instead of the default i64.
         let time: u64 = (current_timestamp + step * 30i64).cast_unsigned();
-        let generated = totp_custom::<Sha1>(30, 6, &decoded_secret, time);
+        let generated = totp_code_at(&decoded_secret, time);
 
         // Check the given code equals the generated and if the time_step is larger then the one last used.
         if generated == totp_code && time_step > twofactor.last_used {
@@ -167,6 +169,30 @@ pub async fn validate_totp_code(
             event: EventType::UserFailedLogIn2fa
         }
     );
+}
+
+fn totp_code_at(key: &[u8], time: u64) -> String {
+    use crate::crypto::backend::hmac;
+
+    if !cfg!(feature = "fips") {
+        return totp_lite::totp_custom::<totp_lite::Sha1>(30, 6, key, time);
+    }
+
+    let key = hmac::Key::new(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, key);
+    let mac = hmac::sign(&key, &(time / 30).to_be_bytes());
+    let bytes = mac.as_ref();
+    // RFC 4226 dynamic truncation, using the low nibble of the last HMAC byte.
+    let offset = usize::from(bytes[19] & 0x0f);
+    let value = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) & 0x7fff_ffff;
+    format!("{:06}", value % 1_000_000)
+}
+
+#[cfg(test)]
+#[test]
+fn totp_matches_rfc_6238_sha1_vectors_truncated_to_six_digits() {
+    let seed = b"12345678901234567890";
+    assert_eq!(totp_code_at(seed, 59), "287082");
+    assert_eq!(totp_code_at(seed, 1_111_111_109), "081804");
 }
 
 #[derive(Debug, Deserialize)]

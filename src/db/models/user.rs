@@ -249,7 +249,7 @@ impl User {
         conn: &DbConn,
     ) -> EmptyResult {
         self.password_hash =
-            crypto::hash_password(password.as_bytes(), &self.salt, self.password_iterations.cast_unsigned());
+            crypto::hash_password(password.as_bytes(), &self.salt, self.password_iterations.cast_unsigned())?;
 
         if let Some(route) = allow_next_route {
             self.set_stamp_exception(route);
@@ -769,6 +769,7 @@ mod tests {
                 .args(["--exact", std::thread::current().name().unwrap(), "--nocapture"])
                 .env("VAULTWARDEN_ISOLATED_CONFIG_TEST", "1")
                 .env("DATABASE_URL", "sqlite://:memory:")
+                .env("DOMAIN", "https://vaultwarden.test")
                 // Keep a local `.env` out of the tests, such as SMTP settings that would send mail.
                 .env(
                     "ENV_FILE",

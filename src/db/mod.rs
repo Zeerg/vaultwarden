@@ -123,6 +123,19 @@ pub enum DbConnType {
 
 pub static ACTIVE_DB_TYPE: OnceLock<DbConnType> = OnceLock::new();
 
+#[cfg(feature = "fips")]
+pub(crate) fn mysql_verify_identity_supported() -> bool {
+    #[cfg(mysql)]
+    {
+        use mysqlclient_sys::mysql_option::{MYSQL_OPT_SSL_MODE, MYSQL_SERVER_PUBLIC_KEY};
+
+        // mysqlclient-sys aliases this option on clients without SSL mode support.
+        MYSQL_OPT_SSL_MODE != MYSQL_SERVER_PUBLIC_KEY
+    }
+    #[cfg(not(mysql))]
+    false
+}
+
 pub struct DbConn {
     conn: Arc<Mutex<Option<PooledConnection<DbConnManager>>>>,
     permit: Option<OwnedSemaphorePermit>,
@@ -611,6 +624,7 @@ pub mod test_db {
                 .args(["--exact", std::thread::current().name().unwrap(), "--nocapture"])
                 .env("VAULTWARDEN_ISOLATED_CONFIG_TEST", "1")
                 .env("DATABASE_URL", "sqlite://:memory:")
+                .env("DOMAIN", "https://vaultwarden.test")
                 // Keep a local `.env` out of the tests, such as SMTP settings that would send mail
                 .env(
                     "ENV_FILE",

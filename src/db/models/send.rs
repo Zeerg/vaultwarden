@@ -99,13 +99,13 @@ impl Send {
         }
     }
 
-    pub fn set_password(&mut self, password: Option<&str>) {
+    pub fn set_password(&mut self, password: Option<&str>) -> EmptyResult {
         const PASSWORD_ITER: i32 = 100_000;
 
         if let Some(password) = password {
-            self.password_iter = Some(PASSWORD_ITER);
             let salt = crate::crypto::get_random_bytes::<64>().to_vec();
-            let hash = crate::crypto::hash_password(password.as_bytes(), &salt, PASSWORD_ITER as u32);
+            let hash = crate::crypto::hash_password(password.as_bytes(), &salt, PASSWORD_ITER as u32)?;
+            self.password_iter = Some(PASSWORD_ITER);
             self.password_salt = Some(salt);
             self.password_hash = Some(hash);
         } else {
@@ -113,6 +113,7 @@ impl Send {
             self.password_salt = None;
             self.password_hash = None;
         }
+        Ok(())
     }
 
     pub fn check_password(&self, password: &str) -> bool {

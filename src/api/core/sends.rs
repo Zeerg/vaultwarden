@@ -177,7 +177,7 @@ fn create_send(data: SendData, user_id: UserId) -> ApiResult<Send> {
     send.hide_email = data.hide_email;
     send.atype = data.r#type;
 
-    send.set_password(data.password.as_deref());
+    send.set_password(data.password.as_deref())?;
 
     Ok(send)
 }
@@ -538,7 +538,7 @@ async fn update_send_from_data(
 
     // Only change the value if it's present
     if let Some(password) = data.password {
-        send.set_password(Some(&password));
+        send.set_password(Some(&password))?;
     }
 
     send.save(conn).await?;
@@ -575,7 +575,7 @@ async fn put_remove_password(send_id: SendId, headers: Headers, conn: DbConn, nt
         err!("Send not found", "Invalid send uuid, or does not belong to user")
     };
 
-    send.set_password(None);
+    send.set_password(None)?;
     send.save(&conn).await?;
     nt.send_send_update(
         UpdateType::SyncSendUpdate,

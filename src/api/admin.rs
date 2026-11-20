@@ -231,8 +231,13 @@ fn post_admin_login(
 }
 
 fn validate_token(token: &str) -> bool {
+    use crate::crypto;
+
     match CONFIG.admin_token().as_ref() {
         None => false,
+        Some(t) if t.starts_with("$sha256$") => crypto::admin_token_digest(t)
+            .is_some_and(|hash| crypto::ct_eq(hash, crypto::sha256_hex(token.trim().as_bytes()))),
+        Some(_) if cfg!(feature = "fips") => false,
         Some(t) if t.starts_with("$argon2") => {
             use argon2::password_hash::PasswordVerifier;
             match argon2::password_hash::phc::PasswordHash::new(t) {
@@ -246,7 +251,7 @@ fn validate_token(token: &str) -> bool {
                 }
             }
         }
-        Some(t) => crate::crypto::ct_eq(t.trim(), token.trim()),
+        Some(t) => crypto::ct_eq(t.trim(), token.trim()),
     }
 }
 
