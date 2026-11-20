@@ -3,6 +3,9 @@ use std::env;
 const OPENSSL_DOC: &str = "https://github.com/kanidm/webauthn-rs/blob/master/OpenSSL.md";
 
 fn main() {
+    if env::var("DEP_OPENSSL_AWSLC_FIPS").as_deref() == Ok("true") {
+        return;
+    }
     println!();
     if let Ok(v) = env::var("DEP_OPENSSL_VERSION_NUMBER") {
         let version =

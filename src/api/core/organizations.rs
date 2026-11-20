@@ -3275,8 +3275,7 @@ struct OrganizationUserRecoverAccountRequest {
 #[get("/organizations/<org_id>/public-key")]
 async fn get_organization_public_key(org_id: OrganizationId, headers: Headers, conn: DbConn) -> JsonResult {
     // SSO users without an org get the fake one, whose key the v2 JIT password flow fetches anyway
-    if !cfg!(feature = "fips") && org_id.eq_ignore_ascii_case(FAKE_SSO_IDENTIFIER) && headers.user.private_key.is_none()
-    {
+    if org_id.eq_ignore_ascii_case(FAKE_SSO_IDENTIFIER) && headers.user.private_key.is_none() {
         return Ok(Json(json!({
             "object": "organizationPublicKey",
             "publicKey": fake_sso_org_public_key().await?,
@@ -3307,7 +3306,11 @@ async fn get_organization_public_key(org_id: OrganizationId, headers: Headers, c
 /// so it is made once and its private half dropped.
 async fn fake_sso_org_public_key() -> ApiResult<String> {
     static PUBLIC_KEY: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| {
-        let der = openssl::rsa::Rsa::generate(2048).and_then(|rsa| rsa.public_key_to_der()).ok()?;
+        #[cfg(feature = "fips")]
+        let rsa = crate::fips::generate_rsa_key().ok()?;
+        #[cfg(not(feature = "fips"))]
+        let rsa = openssl::rsa::Rsa::generate(2048).ok()?;
+        let der = rsa.public_key_to_der().ok()?;
         Some(data_encoding::BASE64.encode(&der))
     });
 

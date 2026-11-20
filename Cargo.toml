@@ -7,10 +7,13 @@ publish = false
 
 [workspace]
 members = ["macros"]
-exclude = ["crates/reqsign-core"]
+exclude = ["crates/reqsign-core", "crates/webauthn-attestation-ca", "crates/webauthn-rs-core", "crates/yubico_ng"]
 
 [patch.crates-io]
 reqsign-core = { path = "crates/reqsign-core" }
+webauthn-attestation-ca = { path = "crates/webauthn-attestation-ca" }
+webauthn-rs-core = { path = "crates/webauthn-rs-core" }
+yubico_ng = { path = "crates/yubico_ng" }
 
 [package]
 name = "vaultwarden"
@@ -40,7 +43,7 @@ sqlite = ["sqlite_system", "libsqlite3-sys/bundled"] # Statically link SQLite in
 # Enable to use a vendored and statically linked openssl
 vendored_openssl = ["openssl/vendored"]
 # Use the AWS-LC 4 FIPS module for server cryptography. See docs/fips.md.
-fips = ["dep:aws-lc-rs", "jsonwebtoken/aws_lc_rs", "reqsign-core?/aws-lc-fips", "rustls/fips"]
+fips = ["dep:aws-lc-rs", "jsonwebtoken/aws_lc_rs", "openssl/aws-lc-fips", "reqsign-core?/aws-lc-fips", "rustls/fips", "yubico_ng/aws-lc-fips"]
 # Enable MiMalloc memory allocator to replace the default malloc
 # This can improve performance for Alpine builds
 enable_mimalloc = ["dep:mimalloc"]

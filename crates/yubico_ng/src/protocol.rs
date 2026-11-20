@@ -126,7 +126,7 @@ pub(crate) fn build_request(otp: impl Into<String>, config: &Config) -> Result<R
     // This signature needs to be Base64 Encoded according to RFC 4648
     // And added as `h` parameter to the query
     let query = form_urlencoded::Serializer::new(query)
-        .append_pair("h", &STANDARD.encode(signature.into_bytes()))
+        .append_pair("h", &STANDARD.encode(signature))
         .finish();
 
     Ok(Request {
@@ -147,6 +147,7 @@ fn valid_otp_string(otp: &str) -> bool {
 // Generate a random string based upon the 62 allowed characters
 // This function has a modulo bias since 62 is not dividable by 256 which means some chars might be selected more often
 // The risk of this being an issue is very small.
+#[cfg(not(feature = "aws-lc-fips"))]
 fn generate_nonce() -> Result<String> {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -156,6 +157,21 @@ fn generate_nonce() -> Result<String> {
         .iter()
         .map(|b| CHARSET[(*b as usize) % CHARSET.len()] as char)
         .collect())
+}
+
+#[cfg(feature = "aws-lc-fips")]
+fn generate_nonce() -> Result<String> {
+    use aws_lc_rs::rand::{SecureRandom, SystemRandom};
+
+    const HEX: &[u8] = b"0123456789abcdef";
+    let mut bytes = [0u8; 20];
+    SystemRandom::new().fill(&mut bytes).map_err(|_| YubicoError::NonceGeneration)?;
+    let mut nonce = String::with_capacity(40);
+    for byte in bytes {
+        nonce.push(char::from(HEX[usize::from(byte >> 4)]));
+        nonce.push(char::from(HEX[usize::from(byte & 15)]));
+    }
+    Ok(nonce)
 }
 
 #[cfg(test)]

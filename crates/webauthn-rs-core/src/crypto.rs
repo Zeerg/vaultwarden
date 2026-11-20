@@ -12,6 +12,27 @@ use crate::proto::*;
 
 use x509_parser::prelude::{X509Error, X509Name};
 
+#[cfg(aws_lc_fips)]
+fn validate_fips_key(pkey: &pkey::PKeyRef<pkey::Public>, alg: COSEAlgorithm) -> Result<(), WebauthnError> {
+    let approved = match alg {
+        COSEAlgorithm::ES256 => pkey.ec_key().is_ok_and(|key| {
+            key.group().curve_name() == Some(nid::Nid::X9_62_PRIME256V1)
+        }),
+        COSEAlgorithm::RS256 => pkey.rsa().is_ok_and(|key| {
+            let bits = key.n().num_bits();
+            (2048..=8192).contains(&bits) && bits % 2 == 0 && key.n().is_odd()
+                && (17..=256).contains(&key.e().num_bits()) && key.e().is_odd()
+        }),
+        COSEAlgorithm::EDDSA => pkey.id() == pkey::Id::ED25519,
+        _ => false,
+    };
+    if approved {
+        Ok(())
+    } else {
+        Err(WebauthnError::CredentialInsecureCryptography)
+    }
+}
+
 // Why OpenSSL over another rust crate?
 // - The openssl crate allows us to reconstruct a public key from the
 //   x/y group coords, where most others want a pkcs formatted structure. As
@@ -26,6 +47,9 @@ fn pkey_verify_signature(
     signature: &[u8],
     verification_data: &[u8],
 ) -> Result<bool, WebauthnError> {
+    #[cfg(aws_lc_fips)]
+    validate_fips_key(pkey, stype)?;
+
     let mut verifier = match stype {
         COSEAlgorithm::ES256 => sign::Verifier::new(hash::MessageDigest::sha256(), pkey)
             .map_err(WebauthnError::OpenSSLError),
@@ -504,7 +528,10 @@ impl COSEKey {
     }
 
     pub(crate) fn validate(&self) -> Result<(), WebauthnError> {
-        self.get_openssl_pkey().map(|_| ())
+        let _pkey = self.get_openssl_pkey()?;
+        #[cfg(aws_lc_fips)]
+        validate_fips_key(&_pkey, self.type_)?;
+        Ok(())
     }
 
     /// Retrieve the public key of this COSEKey as an OpenSSL structure
@@ -545,7 +572,10 @@ impl COSEKey {
             COSEKeyType::EC_OKP(edk) => {
                 let id = match &edk.curve {
                     EDDSACurve::ED25519 => pkey::Id::ED25519,
+                    #[cfg(not(aws_lc_fips))]
                     EDDSACurve::ED448 => pkey::Id::ED448,
+                    #[cfg(aws_lc_fips)]
+                    EDDSACurve::ED448 => return Err(WebauthnError::CredentialInsecureCryptography),
                 };
 
                 pkey::PKey::public_key_from_raw_bytes(edk.x.as_ref(), id)

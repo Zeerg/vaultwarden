@@ -1386,11 +1386,19 @@ fn validate_fips_config(cfg: &ConfigItems) -> Result<(), Error> {
     if !Url::parse(&cfg.domain).is_ok_and(|url| url.scheme() == "https" && url.has_host()) {
         err!("FIPS mode requires DOMAIN to use https://");
     }
-    if cfg.sso_enabled {
-        err!("SSO is unavailable in FIPS mode");
+    if cfg.sso_enabled && !Url::parse(&cfg.sso_authority).is_ok_and(|url| url.scheme() == "https" && url.has_host()) {
+        err!("FIPS mode requires SSO_AUTHORITY to use https://");
     }
-    if (cfg._enable_duo && cfg.duo_host.is_some()) || (cfg._enable_yubico && cfg.yubico_client_id.is_some()) {
-        err!("Duo and Yubico OTP are unavailable in FIPS mode");
+    if cfg._enable_duo && cfg.duo_skey.as_ref().is_some_and(|key| key.len() < 14) {
+        err!("FIPS mode requires a Duo secret of at least 14 bytes");
+    }
+    if cfg._enable_yubico
+        && cfg
+            .yubico_secret_key
+            .as_ref()
+            .is_some_and(|key| data_encoding::BASE64.decode(key.as_bytes()).is_ok_and(|secret| secret.len() < 14))
+    {
+        err!("FIPS mode requires a decoded Yubico OTP secret of at least 14 bytes");
     }
     if cfg._enable_smtp
         && (cfg.use_sendmail
@@ -1748,7 +1756,7 @@ impl Config {
     }
 
     pub fn is_webauthn_2fa_supported(&self) -> bool {
-        !cfg!(feature = "fips") && Url::parse(&self.domain()).expect("DOMAIN not a valid URL").domain().is_some()
+        Url::parse(&self.domain()).expect("DOMAIN not a valid URL").domain().is_some()
     }
 
     /// Tests whether the admin token is set to a non-empty value.

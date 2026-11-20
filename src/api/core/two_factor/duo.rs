@@ -170,6 +170,10 @@ async fn duo_api_request(method: &str, path: &str, params: &str, data: &DuoData)
     use reqwest::{Method, header};
     use std::str::FromStr;
 
+    if cfg!(feature = "fips") && data.sk.len() < 14 {
+        err!("FIPS mode requires a Duo secret of at least 14 bytes");
+    }
+
     // https://duo.com/docs/authapi#api-details
     let url = format!("https://{}{path}", data.host);
     let dt = Utc::now().to_rfc2822();
@@ -221,6 +225,9 @@ pub(crate) async fn get_duo_keys_email(email: &str, conn: &DbConn) -> ApiResult<
         _ => DuoData::global(),
     }
     .map_res("Can't fetch Duo Keys")?;
+    if cfg!(feature = "fips") && data.sk.len() < 14 {
+        err!("FIPS mode requires a Duo secret of at least 14 bytes");
+    }
 
     Ok((data.ik, data.sk, data.host))
 }

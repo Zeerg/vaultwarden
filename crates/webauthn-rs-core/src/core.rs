@@ -15,6 +15,7 @@
 
 #![warn(missing_docs)]
 
+#[cfg(not(aws_lc_fips))]
 use rand::prelude::*;
 use std::time::Duration;
 use url::Url;
@@ -26,7 +27,7 @@ use crate::attestation::{
 };
 use crate::constants::CHALLENGE_SIZE_BYTES;
 use crate::crypto::compute_sha256;
-use crate::error::WebauthnError;
+use crate::error::{WebauthnError, WebauthnResult};
 use crate::internals::*;
 use crate::proto::*;
 
@@ -225,9 +226,16 @@ impl WebauthnCore {
         &self.allowed_origins
     }
 
-    fn generate_challenge(&self) -> Challenge {
-        let mut rng = rand::rng();
-        Challenge::new(rng.random::<[u8; CHALLENGE_SIZE_BYTES]>().to_vec())
+    fn generate_challenge(&self) -> WebauthnResult<Challenge> {
+        #[cfg(aws_lc_fips)]
+        let bytes = {
+            let mut bytes = [0; CHALLENGE_SIZE_BYTES];
+            openssl::rand::rand_bytes(&mut bytes).map_err(WebauthnError::OpenSSLError)?;
+            bytes
+        };
+        #[cfg(not(aws_lc_fips))]
+        let bytes = rand::rng().random::<[u8; CHALLENGE_SIZE_BYTES]>();
+        Ok(Challenge::new(bytes.to_vec()))
     }
 
     /// Generate a new challenge builder for client registration. This is the first step in
@@ -293,7 +301,7 @@ impl WebauthnCore {
             hints,
         } = challenge_builder;
 
-        let challenge = self.generate_challenge();
+        let challenge = self.generate_challenge()?;
 
         let resident_key = if require_resident_key {
             Some(ResidentKeyRequirement::Required)
@@ -995,7 +1003,7 @@ impl WebauthnCore {
             hints,
         } = challenge_builder;
 
-        let chal = self.generate_challenge();
+        let chal = self.generate_challenge()?;
 
         // Get the user's existing creds if any.
         let ac = creds

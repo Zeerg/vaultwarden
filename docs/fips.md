@@ -1,10 +1,10 @@
 # AWS-LC FIPS mode
 
-Build with the `fips` Cargo feature to enable AWS-LC FIPS for Vaultwarden's server-side cryptography. The resulting binary checks the AWS-LC module and rustls provider at startup. HTTPS and SMTP TLS clients, server JWTs and RSA key generation, password hashing, authenticator HMAC, cryptographic randomness, and S3 SigV4 use AWS-LC. A standard build has the upstream crypto behavior.
+Build with the `fips` Cargo feature to enable AWS-LC FIPS for Vaultwarden's server-side cryptography. The resulting binary checks the AWS-LC module and rustls provider at startup. HTTPS and SMTP TLS clients, server JWTs and RSA key generation, password hashing, authenticator HMAC, cryptographic randomness, and S3 SigV4 use AWS-LC. SSO, WebAuthn, Duo, and Yubico OTP also use AWS-LC in this profile. A standard build has the upstream crypto behavior.
 
 ## Build
 
-On Linux, install a C/C++ toolchain, CMake, Go, pkg-config, OpenSSL 3 development headers, PostgreSQL client development headers and MySQL-compatible client development headers. Some targets also need libclang for Rust bindings. Build with the Rust version in `rust-toolchain.toml`.
+On Linux, install a C/C++ toolchain, CMake, Go, pkg-config, libclang, PostgreSQL client development headers and MySQL-compatible client development headers. AWS-LC supplies the OpenSSL-compatible API used by WebAuthn in the FIPS build. Build with the Rust version in `rust-toolchain.toml`.
 
 ```sh
 cargo build --locked --profile release-low --features sqlite,mysql,postgresql,s3,fips
@@ -23,10 +23,14 @@ docker run --rm -v "$PWD:/src:ro" -w /src -e CARGO_TARGET_DIR=/tmp/vaultwarden-t
   -e AWS_LC_FIPS_SYS_USE_SYSTEM=0 -e AWS_LC_FIPS_SYS_STATIC=1 \
   "rust:${VW_RUST_VERSION}-bookworm" bash -euc '
     apt-get update
-    apt-get install -y --no-install-recommends cmake golang-go libclang-dev libmariadb-dev-compat libpq-dev libssl-dev
+    apt-get install -y --no-install-recommends cmake golang-go libclang-dev libmariadb-dev-compat libpq-dev python3 python3-cryptography
     cargo test --locked --profile ci --features sqlite,mysql,postgresql,s3,fips
+    cargo build --locked --profile ci --features sqlite,mysql,postgresql,s3,fips
+    python3 tools/fips-auth-smoke.py "$CARGO_TARGET_DIR/ci/vaultwarden"
   '
 ```
+
+The authentication smoke test uses local TLS providers and a software WebAuthn authenticator to check successful sign-in and rejection of invalid signatures or MACs.
 
 ## Run Vaultwarden
 
@@ -68,10 +72,16 @@ export ATTACHMENTS_FOLDER='s3://vaultwarden-bucket/attachments?region=us-gov-wes
 
 Supply `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and, for temporary credentials, `AWS_SESSION_TOKEN`. Alternatively, set `FIPS_S3_CREDENTIAL_PROCESS` to a trusted credential helper returning AWS credential-process JSON. The helper's cryptography and credential exchange run outside Vaultwarden. Inline static URI credentials also work. Keep credentials out of command arguments and logs. The FIPS build bypasses the SDK's default credential chain, which includes independent STS and SSO signing. It rejects anonymous requests, S3 Express, SSE-C, and MD5 checksums. S3-side encryption and key management are storage service controls.
 
-SMTP requires TLS with certificate and hostname verification. The build limits server-side HTTP calls to HTTPS. SSO, Duo, Yubico OTP, and WebAuthn are unavailable in this profile. Before switching an existing database, ensure users have a supported MFA method such as an authenticator app or verified email. Rotate Send passwords shorter than 14 bytes. Vault data encryption and the client KDF run in Bitwarden clients and require a separate client assessment.
+SMTP requires TLS with certificate and hostname verification. The build limits server-side HTTP calls to HTTPS. Rotate Send passwords shorter than 14 bytes. Vault data encryption and the client KDF run in Bitwarden clients and require a separate client assessment.
+
+## SSO and MFA
+
+- SSO uses the normal `SSO_*` settings with an HTTPS issuer. Vaultwarden verifies signed OIDC claims with AWS-LC. The FIPS implementation supports RS256/384/512, PS256/384/512, ES256/384, Ed25519, and HS256/384/512 with keys at least as long as the corresponding digest.
+- WebAuthn retains existing credential and challenge formats. Registration offers ES256 and RS256. Authentication uses the AWS-LC OpenSSL-compatible API and enforces curve and RSA key-strength requirements. RSA keys must be at least 2048 bits and use an odd public exponent of at least 65537.
+- Duo uses AWS-LC HMAC for the Auth API check and Universal Prompt JWTs. Yubico OTP uses AWS-LC HMAC-SHA-1 and an AWS-LC-generated nonce. Both require a shared secret of at least 14 bytes after decoding any API encoding. The selected provider and authenticator remain part of the deployment's assessment.
 
 ## Validation scope
 
 Record the deployed binary digest, Cargo.lock, AWS-LC source and build inputs, linked database client libraries, operational environment, and TLS terminator configuration. The bundled build currently reports AWS-LC **4.2.0**. The security policy for [CMVP certificate #5596](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5596) identifies **4.0.0** and specifies the source archive, build procedure, and tested environment. A successful startup check establishes module operation and provider selection. Certificate applicability requires evidence for the exact module and environment.
 
-`aws-lc-fips-sys` can link an administrator-supplied module with `AWS_LC_FIPS_SYS_SYSTEM_DIR` and matching Rust bindings. Set `VW_FIPS_EXPECTED_AWS_LC_VERSION` at build time to enforce the intended library version at runtime. Validate this build and the module's approved services on the deployment platform before federal use. See [AWS-LC system linking](https://github.com/aws/aws-lc-rs/tree/main/aws-lc-fips-sys#using-a-system-installed-aws-lc-fips-module) and the [CMVP guidance for federal users](https://csrc.nist.gov/projects/cryptographic-module-validation-program/validated-modules).
+`aws-lc-fips-sys` can link an administrator-supplied module with `AWS_LC_FIPS_SYS_SYSTEM_DIR`. The installation needs `libcrypto`, `libssl`, and matching Rust bindings for the OpenSSL-compatible dependency. Set `VW_FIPS_EXPECTED_AWS_LC_VERSION` at build time to enforce the intended library version at runtime. Validate this build and the module's approved services on the deployment platform before federal use. See [AWS-LC system linking](https://github.com/aws/aws-lc-rs/tree/main/aws-lc-fips-sys#using-a-system-installed-aws-lc-fips-module) and the [CMVP guidance for federal users](https://csrc.nist.gov/projects/cryptographic-module-validation-program/validated-modules).

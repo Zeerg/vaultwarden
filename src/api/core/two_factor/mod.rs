@@ -44,17 +44,13 @@ pub fn is_twofactor_provider_usable(provider_type: &TwoFactorType, provider_data
         TwoFactorType::Authenticator | TwoFactorType::RecoveryCode => true,
         TwoFactorType::Email => CONFIG._enable_email_2fa(),
         TwoFactorType::Duo | TwoFactorType::OrganizationDuo => {
-            !cfg!(feature = "fips")
-                && (provider_data
-                    .and_then(|raw| serde_json::from_str::<DuoProviderData>(raw).ok())
-                    .is_some_and(|duo| !duo.host.is_empty() && !duo.ik.is_empty() && !duo.sk.is_empty())
-                    || has_global_duo_credentials())
+            provider_data
+                .and_then(|raw| serde_json::from_str::<DuoProviderData>(raw).ok())
+                .is_some_and(|duo| !duo.host.is_empty() && !duo.ik.is_empty() && !duo.sk.is_empty())
+                || has_global_duo_credentials()
         }
         TwoFactorType::YubiKey => {
-            !cfg!(feature = "fips")
-                && CONFIG._enable_yubico()
-                && CONFIG.yubico_client_id().is_some()
-                && CONFIG.yubico_secret_key().is_some()
+            CONFIG._enable_yubico() && CONFIG.yubico_client_id().is_some() && CONFIG.yubico_secret_key().is_some()
         }
         TwoFactorType::Webauthn => CONFIG.is_webauthn_2fa_supported(),
         TwoFactorType::Remember => !CONFIG.disable_2fa_remember(),
@@ -72,12 +68,10 @@ pub fn routes() -> Vec<Route> {
     let mut routes = routes![get_twofactor, get_recover, get_device_verification_settings];
 
     routes.append(&mut authenticator::routes());
-    if !cfg!(feature = "fips") {
-        routes.append(&mut duo::routes());
-        routes.append(&mut webauthn::routes());
-        routes.append(&mut yubikey::routes());
-    }
+    routes.append(&mut duo::routes());
     routes.append(&mut email::routes());
+    routes.append(&mut webauthn::routes());
+    routes.append(&mut yubikey::routes());
     routes.append(&mut protected_actions::routes());
 
     routes

@@ -3644,6 +3644,7 @@ version = "0.9.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19c413d6ec9ebaf5e1c829d355cb3e9f783778d700f135be0921d52fce3c60ae"
 dependencies = [
+ "aws-lc-fips-sys",
  "cc",
  "libc",
  "openssl-src",
@@ -6339,8 +6340,6 @@ dependencies = [
 [[package]]
 name = "webauthn-attestation-ca"
 version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6475c0bbd1a3f04afaa3e98880408c5be61680c5e6bd3c6f8c250990d5d3e18e"
 dependencies = [
  "base64urlsafedata",
  "openssl",
@@ -6367,8 +6366,6 @@ dependencies = [
 [[package]]
 name = "webauthn-rs-core"
 version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "296d2d501feb715d80b8e186fb88bab1073bca17f460303a1013d17b673bea6a"
 dependencies = [
  "base64 0.21.7",
  "base64urlsafedata",
@@ -6790,9 +6787,8 @@ dependencies = [
 [[package]]
 name = "yubico_ng"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "563eb0ab41031e758446e3737231541bb4556d6af1e893e94faa09c989f794af"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.23.1",
  "form_urlencoded",
  "getrandom 0.4.3",

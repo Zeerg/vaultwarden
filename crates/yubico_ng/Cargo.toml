@@ -50,6 +50,7 @@ rustdoc-args = [
 ]
 
 [features]
+aws-lc-fips = ["dep:aws-lc-rs"]
 default = [
     "reqwest",
     "default-tls",
@@ -98,6 +99,12 @@ required-features = ["reqwest-blocking"]
 
 [dependencies.base64]
 version = "0.23"
+
+[dependencies.aws-lc-rs]
+version = "=1.19.0"
+default-features = false
+features = ["fips"]
+optional = true
 
 [dependencies.form_urlencoded]
 version = "1"

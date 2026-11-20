@@ -62,6 +62,8 @@ mod mail;
 mod ratelimit;
 mod sso;
 mod sso_client;
+#[cfg(feature = "fips")]
+mod sso_jwk;
 mod storage;
 mod util;
 

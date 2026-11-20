@@ -2,15 +2,16 @@ use std::{borrow::Cow, collections::HashSet, pin::Pin, sync::LazyLock, time::Dur
 
 use openidconnect::{
     AccessToken, AsyncHttpClient, AuthDisplay, AuthPrompt, AuthType, AuthenticationFlow, AuthorizationCode,
-    AuthorizationRequest, ClientId, ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields,
-    EndpointNotSet, EndpointSet, HttpClientError, HttpRequest, HttpResponse, IdTokenClaims, IdTokenFields, Nonce,
-    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RefreshToken, ResponseType, Scope, StandardErrorResponse,
-    StandardTokenResponse,
+    AuthorizationRequest, ClientId, ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyAdditionalProviderMetadata,
+    EmptyExtraTokenFields, EndpointNotSet, EndpointSet, HttpClientError, HttpRequest, HttpResponse, IdTokenClaims,
+    IdTokenFields, IdTokenVerifier, Nonce, OAuth2TokenResponse, PkceCodeVerifier, ProviderMetadata, RefreshToken,
+    ResponseType, Scope, StandardErrorResponse, StandardTokenResponse,
     core::{
-        CoreAuthDisplay, CoreAuthPrompt, CoreClient, CoreClientAuthMethod, CoreErrorResponseType, CoreGenderClaim,
-        CoreIdTokenVerifier, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm,
-        CoreProviderMetadata, CoreResponseType, CoreRevocableToken, CoreRevocationErrorResponse,
-        CoreTokenIntrospectionResponse, CoreTokenResponse, CoreTokenType, CoreUserInfoClaims,
+        CoreAuthDisplay, CoreAuthPrompt, CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreErrorResponseType,
+        CoreGenderClaim, CoreGrantType, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm,
+        CoreJwsSigningAlgorithm, CoreResponseMode, CoreResponseType, CoreRevocableToken, CoreRevocationErrorResponse,
+        CoreSubjectIdentifierType, CoreTokenIntrospectionResponse, CoreTokenResponse, CoreTokenType,
+        CoreUserInfoClaims,
     },
     http,
 };
@@ -20,10 +21,31 @@ use url::Url;
 use crate::{
     CONFIG,
     api::{ApiResult, EmptyResult},
+    crypto::{self, backend::digest},
     db::models::SsoAuth,
     http_client::get_reqwest_client_builder,
     sso::{OIDCCode, OIDCCodeChallenge, OIDCCodeVerifier, OIDCState},
 };
+
+#[cfg(feature = "fips")]
+use crate::sso_jwk::FipsJsonWebKey as OidcJsonWebKey;
+#[cfg(not(feature = "fips"))]
+use openidconnect::core::CoreJsonWebKey as OidcJsonWebKey;
+
+type OidcProviderMetadata = ProviderMetadata<
+    EmptyAdditionalProviderMetadata,
+    CoreAuthDisplay,
+    CoreClientAuthMethod,
+    CoreClaimName,
+    CoreClaimType,
+    CoreGrantType,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJweKeyManagementAlgorithm,
+    OidcJsonWebKey,
+    CoreResponseMode,
+    CoreResponseType,
+    CoreSubjectIdentifierType,
+>;
 
 const CLIENT_CACHE_KEY: &str = "sso-client";
 static CLIENT_CACHE: LazyLock<moka::sync::Cache<&'static str, Client>> = LazyLock::new(|| {
@@ -41,7 +63,7 @@ pub type CustomClient = openidconnect::Client<
     CoreAuthDisplay,
     CoreGenderClaim,
     CoreJweContentEncryptionAlgorithm,
-    CoreJsonWebKey,
+    OidcJsonWebKey,
     CoreAuthPrompt,
     StandardErrorResponse<CoreErrorResponseType>,
     CoreTokenResponse,
@@ -118,7 +140,7 @@ impl Client {
             Ok(client) => client,
         };
 
-        let provider_metadata = match CoreProviderMetadata::discover_async(issuer_url, &http_client).await {
+        let provider_metadata = match OidcProviderMetadata::discover_async(issuer_url, &http_client).await {
             Err(err) => err!(format!("Failed to discover OpenID provider: {err}")),
             Ok(metadata) => metadata,
         };
@@ -127,7 +149,8 @@ impl Client {
             .token_endpoint_auth_methods_supported()
             .map(|v| v.iter().map(ToOwned::to_owned).collect());
 
-        let mut base_client = CoreClient::from_provider_metadata(provider_metadata, client_id, Some(client_secret));
+        let mut base_client =
+            openidconnect::Client::from_provider_metadata(provider_metadata, client_id, Some(client_secret));
 
         if let Some(am) = auth_methods {
             if am.contains(&CoreClientAuthMethod::ClientSecretBasic) {
@@ -199,7 +222,7 @@ impl Client {
             .authorize_url(
                 AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
                 || CsrfToken::new(base64_state),
-                Nonce::new_random,
+                || Nonce::new(crypto::encode_random_bytes::<32>(&data_encoding::BASE64URL_NOPAD)),
             )
             .add_scopes(scopes)
             .add_extra_params(CONFIG.sso_authorize_extra_params_vec());
@@ -216,9 +239,15 @@ impl Client {
 
     // Check the client's PKCE verifier against the challenge it sent when starting the flow
     pub fn check_client_verifier(client_verifier: &OIDCCodeVerifier, sso_auth: &SsoAuth) -> EmptyResult {
-        let verifier = PkceCodeVerifier::new(client_verifier.to_string());
-        let challenge = PkceCodeChallenge::from_code_verifier_sha256(&verifier);
-        if challenge.as_str() != &*sso_auth.client_challenge {
+        let verifier = client_verifier.as_bytes();
+        if !(43..=128).contains(&verifier.len())
+            || !verifier.iter().all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(byte))
+        {
+            err!("Invalid PKCE code verifier");
+        }
+        let hash = digest::digest(&digest::SHA256, verifier);
+        let challenge = data_encoding::BASE64URL_NOPAD.encode(hash.as_ref());
+        if !crypto::ct_eq(challenge, &*sso_auth.client_challenge) {
             err!("PKCE client challenge failed")
         }
         Ok(())
@@ -243,13 +272,11 @@ impl Client {
         IdTokenClaims<EmptyAdditionalClaims, CoreGenderClaim>,
     )> {
         let oidc_code = AuthorizationCode::new(code.to_string());
-
+        Self::check_client_verifier(&client_verifier, sso_auth)?;
         let mut exchange = self.core_client.exchange_code(oidc_code);
 
         if CONFIG.sso_pkce() {
             exchange = exchange.set_pkce_verifier(PkceCodeVerifier::new(client_verifier.into()));
-        } else {
-            Self::check_client_verifier(&client_verifier, sso_auth)?;
         }
 
         match exchange.request_async(&self.http_client).await {
@@ -298,7 +325,7 @@ impl Client {
         }
     }
 
-    pub fn vw_id_token_verifier(&self) -> CoreIdTokenVerifier<'_> {
+    pub fn vw_id_token_verifier(&self) -> IdTokenVerifier<'_, OidcJsonWebKey> {
         let mut verifier = self.core_client.id_token_verifier();
         if let Some(regex_str) = CONFIG.sso_audience_trusted() {
             match Regex::new(&regex_str) {
